@@ -1,3 +1,6 @@
+#ifndef _SSD1306_H_
+#define _SSD1306_H_
+
 #define DEVICE_NAME "ssd1306"
 #define CMD 1
 #define DATA 0
@@ -137,3 +140,15 @@ struct ssd1306_dev {
     struct gpio_desc *dc_gpio;
     struct gpio_desc *reset_gpio;
 };
+
+/*Function prototypes*/
+static int ssd1306_putchar(struct ssd1306_dev *dev, char ch);
+static int ssd1306_set_cursor(struct ssd1306_dev *dev, u8 page, u8 col);
+static int ssd1306_clear(struct ssd1306_dev *dev);
+static int ssd1306_init_display(struct ssd1306_dev *dev);
+static int ssd1306_write(struct ssd1306_dev *dev, bool is_cmd, const u8 *buf, size_t len);
+static ssize_t ssd1306_fops_write(struct file *filep, const char __user *buf, size_t count, loff_t *offset);
+static int ssd1306_probe(struct spi_device *spi);
+static void ssd1306_remove(struct spi_device *spi);
+
+#endif /* _SSD1306_H_ */

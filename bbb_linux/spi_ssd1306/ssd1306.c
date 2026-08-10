@@ -1,6 +1,6 @@
 #include <linux/init.h>
 #include <linux/module.h>
-#include <linux/spi.h>
+#include <linux/spi/spi.h>
 #include <linux/miscdevice.h>
 #include <linux/fs.h>
 #include <linux/uaccess.h>
@@ -61,19 +61,23 @@ static int ssd1306_putchar(struct ssd1306_dev *dev, char ch)
 static int ssd1306_set_cursor(struct ssd1306_dev *dev, u8 page, u8 col)
 {
     int ret;
+    u8 tmp;
 
     //set page
-    ret = ssd1306_write(dev, CMD, 0xB0 | (page & 0x07));
-    if(!ret)    
+    tmp = 0xB0 | (page & 0x07);
+    ret = ssd1306_write(dev, CMD, &tmp, 1);
+    if(ret < 0)
         return ret;
 
     //set column - lower
-    ret = ssd1306_write(dev, CMD, page & 0x07);
-    if(!ret)    
+    tmp = col & 0x0F;
+    ret = ssd1306_write(dev, CMD, &tmp, 1);
+    if(ret < 0)
         return ret;
     //set column - higher
-    ret = ssd1306_write(dev, CMD, 0x10 | (page & 0x07));
-    if(!ret)    
+    tmp = 0x10 | ((col >> 4) & 0x0F);
+    ret = ssd1306_write(dev, CMD, &tmp, 1);
+    if(ret < 0)
         return ret;
 
     dev->current_page = page;
@@ -89,7 +93,7 @@ static int ssd1306_clear(struct ssd1306_dev *dev)
 
     memset(zeros, 0, sizeof(zeros));
 
-    for(page, page < SSD1306_PAGE; page++)
+    for(page; page < SSD1306_PAGE; page++)
     {
         ret = ssd1306_set_cursor(dev, page, 0);
         if(!ret)
@@ -101,7 +105,7 @@ static int ssd1306_clear(struct ssd1306_dev *dev)
     return ssd1306_set_cursor(dev, 0, 0);
 }
 
-static int ssd13006_init_display(struct ssd1306_dev *dev)
+static int ssd1306_init_display(struct ssd1306_dev *dev)
 {
     int i = 0, ret = 0;
     for(i; i<(sizeof(ssd1306_init_cmds)/sizeof(ssd1306_init_cmds[0])); i++)
@@ -109,14 +113,14 @@ static int ssd13006_init_display(struct ssd1306_dev *dev)
         ret = ssd1306_write(dev, CMD, ssd1306_init_cmds[i], sizeof(ssd1306_init_cmds[i]));
         if(!ret)
         {
-            dev_err(&dev->spi, "write failed: %d\n", ret);
+            dev_err(&dev->spi->dev, "write failed: %d\n", ret);
             return ret;
         }
     }
-
+    return ret;
 }
 
-static int ssd1306_write(struct spi1306_dev *dev, bool is_cmd, const u8 *buf, size_t len)
+static int ssd1306_write(struct ssd1306_dev *dev, bool is_cmd, const u8 *buf, size_t len)
 {
     int ret = 0;
     if(is_cmd)
@@ -128,13 +132,13 @@ static int ssd1306_write(struct spi1306_dev *dev, bool is_cmd, const u8 *buf, si
     ret = spi_write(dev->spi, buf, len);
     if(!ret)
     {
-        dev_err(&dev->spi, "write failed: %d\n", ret);
+        dev_err(&dev->spi->dev, "write failed: %d\n", ret);
         return ret;
     }
     return ret;
 }
 
-static ssize_t ssd1306_fops_write(struct file *filep, const char __user *buf, ssize_t count, loff_t *offset)
+static ssize_t ssd1306_fops_write(struct file *filep, const char __user *buf, size_t count, loff_t *offset)
 {
 	char *kbuf;
 	int ret, i;
@@ -148,7 +152,7 @@ static ssize_t ssd1306_fops_write(struct file *filep, const char __user *buf, ss
 	if(!kbuf)
 		return -ENOMEM;
 	
-	if(copy_from_user(kbuf, buf, count)))
+	if(copy_from_user(kbuf, buf, count))
 	{
 		kfree(kbuf);
 		return -EFAULT;
@@ -205,7 +209,7 @@ static int ssd1306_probe(struct spi_device *spi)
 {
     struct ssd1306_dev *dev;
     int ret;
-    dev = devm_kmalloc(spi->dev, sizeof(*dev), GFP_KERNEL);
+    dev = devm_kmalloc(&spi->dev, sizeof(*dev), GFP_KERNEL);
     if(!ret)
     {
         return -ENOMEM;
@@ -216,15 +220,15 @@ static int ssd1306_probe(struct spi_device *spi)
 
     dev->misc.minor = MISC_DYNAMIC_MINOR;
     dev->misc.name = DEVICE_NAME,
-    dev->fops = ssd1306_fops;
-    dev->dc_gpio = gpiod_get(spi, "dc", GPIOD_OUT_LOW);
-    dev->reset_gpio = gpiod_get(spi, "reset", GPIOD_OUT_LOW);
+     dev->misc.fops = &ssd1306_fops;
+    dev->dc_gpio = gpiod_get(&spi->dev, "dc", GPIOD_OUT_LOW);
+    dev->reset_gpio = gpiod_get(&spi->dev, "reset", GPIOD_OUT_LOW);
 
     ret = misc_register(&dev->misc);
 
     if(!ret)
     {   
-        dev_err(&spi, "misc register failed: %d\n", ret);
+        dev_err(&spi->dev, "misc register failed: %d\n", ret);
         return ret;
     }
 
@@ -241,7 +245,6 @@ static void ssd1306_remove(struct spi_device *spi)
 	ssd1306_write(dev, CMD, 0xAE, sizeof(0xAE)); //Display OFF
 	misc_deregister(&dev->misc);
 	dev_info(&spi->dev, "SSD1306 removed\n");
-	return 0;
 
 }
 
@@ -260,4 +263,4 @@ module_spi_driver(ssd1306_driver);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Somebody");
-MODULE_DESCRIPTIOM("SSD1306-device driver");
+MODULE_DESCRIPTION("SSD1306-device driver");
