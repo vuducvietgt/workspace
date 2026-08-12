@@ -271,7 +271,9 @@ static void ssd1306_remove(struct spi_device *spi)
     u8 tmp = 0xAE;
 	struct ssd1306_dev *dev = spi_get_drvdata(spi);
     if(!dev)
+    {
         return;
+    }
 	ssd1306_clear(dev);
 	ssd1306_write(dev, CMD, &tmp, 1); //Display OFF
 	misc_deregister(&dev->misc);
