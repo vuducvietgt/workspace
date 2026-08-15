@@ -1,0 +1,15 @@
+// Chia làm 2 lớp config (Nhóm 5)
+    -> Lớp 1: config input, output, pullup, pulldown, .... [Common cho tất cả chân pin]
+    -> Lớp 2: MODE2, 3, 4, ... [SCL, SDA, RX, TX, ....] theo từng địa chỉ 0x988 - `conf_i2c0_sda` | I2C0 SDA
+
+// Các nhóm Pin
+Nhóm	    Tên	                    Vùng địa chỉ	            Chức năng chính
+1	    System Identity	            0h–110h	                ID chip, trạng thái boot
+2	    Power & Clock	            428h–50Ch	            LDO, PLL, sleep, thermal
+3	    Device ID & Bus	            600h–614h	            Part number, bus priority
+4	    Peripheral Control	        620h–7FCh	            USB, chế độ Ethernet, PWM, OPP
+5	    Pad Control	                800h–A34h	            ★ PIN MUX — nhóm mình đang học
+6	    DDR PHY	                    E00h–1444h	            DDR impedance, voltage reference
+7	    EDMA & Misc	                F90h–1344h	            DMA event, IPC với Cortex-M3
+
+//
