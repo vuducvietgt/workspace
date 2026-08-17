@@ -12,4 +12,6 @@ Nhóm	    Tên	                    Vùng địa chỉ	            Chức năng c
 6	    DDR PHY	                    E00h–1444h	            DDR impedance, voltage reference
 7	    EDMA & Misc	                F90h–1344h	            DMA event, IPC với Cortex-M3
 
-//
+// file quan trọng
+/home/worker/workspace/bbb/kernelbuildscripts/KERNEL/include/dt-bindings/pinctrl/am33xx.h --> define các pin offset
+/home/worker/workspace/bbb/kernelbuildscripts/KERNEL/include/dt-bindings/pinctrl/omap.h --> define pin mode, các macro setting cho pin (thực chất gần giống như thanh ghi)
