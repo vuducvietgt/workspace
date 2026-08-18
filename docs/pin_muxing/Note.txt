@@ -15,3 +15,6 @@ Nhóm	    Tên	                    Vùng địa chỉ	            Chức năng c
 // file quan trọng
 /home/worker/workspace/bbb/kernelbuildscripts/KERNEL/include/dt-bindings/pinctrl/am33xx.h --> define các pin offset
 /home/worker/workspace/bbb/kernelbuildscripts/KERNEL/include/dt-bindings/pinctrl/omap.h --> define pin mode, các macro setting cho pin (thực chất gần giống như thanh ghi)
+
+// dich nguoc .dtb sang .dts
+dtc -I dtb -O dts -o decompiled_board.dts original_board.dtb
