@@ -20,7 +20,7 @@ static int ssd1306_putchar(struct ssd1306_dev *dev, char ch)
     if(ch == '\n')
     {
         dev->current_page++;
-        if(dev->current_page > SSD1306_PAGE)
+        if(dev->current_page >= SSD1306_PAGE)
             dev->current_page = 0;
         dev->current_col = 0;
         ret = ssd1306_set_cursor(dev, dev->current_page, dev->current_col);
@@ -110,9 +110,9 @@ static int ssd1306_init_display(struct ssd1306_dev *dev)
     int i, ret = 0;
 
     //Make HW reset
-    gpiod_set_value_cansleep(dev->reset_gpio, 1);
-    msleep(100);
     gpiod_set_value_cansleep(dev->reset_gpio, 0);
+    msleep(100);
+    gpiod_set_value_cansleep(dev->reset_gpio, 1);
     msleep(100);
 
     for(i = 0; i<(sizeof(ssd1306_init_cmds)/sizeof(ssd1306_init_cmds[0])); i++)
