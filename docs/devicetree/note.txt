@@ -1,0 +1,8 @@
+//1. Tại sao cần devicetree
+- Tránh hard-code, 1 kernel chạy nhiều board: Không cần build lại kernel cho mỗi board, chỉ cần thay DTB tương ứng.
+- Tính kế thừa (BSP modular): Các board cùng dòng (BeagleBone Black, Blue, WiFi...) chia sẻ phần chung qua *-common.dtsi, mỗi board chỉ cần file .dts riêng khai báo phần khác biệt — không đụng kernel code.
+- devicetree là ngôn ngữ mô tả quan hệ giữa các lớp phần cứng
+  VD: trong UART1 có các node device: device1, device2, ... nhìn vào đây, ta có thể thấy được config phần cứng, mối quan hệ của chúng, device này dùng giao thức truyền thông nào, ...
+
+
+//2. DT trong kernel boot flow
