@@ -24,35 +24,35 @@ static int ssd1306_putchar(struct ssd1306_dev *dev, char ch)
             dev->current_page = 0;
         dev->current_col = 0;
         ret = ssd1306_set_cursor(dev, dev->current_page, dev->current_col);
-        if(!ret)
+        if(ret < 0)
             return ret;
     }
 
-    if(dev->current_col + FONT_WIDTH > SSD1306_WIDTH)
+    if(dev->current_col + FONT_WIDTH + 1 > SSD1306_WIDTH)
     {
         dev->current_page++;
         if(dev->current_page >= SSD1306_PAGE)
             dev->current_page = 0;
         dev->current_col = 0;
         ret = ssd1306_set_cursor(dev, dev->current_page, dev->current_col);
-        if(!ret)
+        if(ret < 0)
             return ret;
     }
 
     data = font5x8[ch - FONT_BEGIN];;
     ret = ssd1306_write(dev, DATA, data, FONT_WIDTH);
-    if(!ret)
+    if(ret < 0)
         return ret;
 
     //writing a space
     ret = ssd1306_write(dev, DATA, &space, 1);
-    if(!ret)
+    if(ret < 0)
         return ret;
     dev->current_col += FONT_WIDTH + 1;
 
     //set cursor after write
     ret = ssd1306_set_cursor(dev, dev->current_page, dev->current_col);
-    if(!ret)
+    if(ret < 0)
         return ret;
 
     return 0;
@@ -89,17 +89,17 @@ static int ssd1306_set_cursor(struct ssd1306_dev *dev, u8 page, u8 col)
 static int ssd1306_clear(struct ssd1306_dev *dev)
 {
     u8 zeros[SSD1306_WIDTH];
-    int page = 0, ret;
+    int page, ret;
 
     memset(zeros, 0, sizeof(zeros));
 
-    for(page; page < SSD1306_PAGE; page++)
+    for(page = 0; page < SSD1306_PAGE; page++)
     {
         ret = ssd1306_set_cursor(dev, page, 0);
-        if(!ret)
+        if(ret < 0)
             return ret;
         ret = ssd1306_write(dev, DATA, zeros, SSD1306_WIDTH);
-        if(!ret)
+        if(ret < 0)
             return ret;
     }
     return ssd1306_set_cursor(dev, 0, 0);
@@ -107,16 +107,25 @@ static int ssd1306_clear(struct ssd1306_dev *dev)
 
 static int ssd1306_init_display(struct ssd1306_dev *dev)
 {
-    int i = 0, ret = 0;
-    for(i; i<(sizeof(ssd1306_init_cmds)/sizeof(ssd1306_init_cmds[0])); i++)
+    int i, ret = 0;
+
+    //Make HW reset
+    gpiod_set_value_cansleep(dev->reset_gpio, 1);
+    msleep(100);
+    gpiod_set_value_cansleep(dev->reset_gpio, 0);
+    msleep(100);
+
+    for(i = 0; i<(sizeof(ssd1306_init_cmds)/sizeof(ssd1306_init_cmds[0])); i++)
     {
-        ret = ssd1306_write(dev, CMD, ssd1306_init_cmds[i], sizeof(ssd1306_init_cmds[i]));
-        if(!ret)
+        ret = ssd1306_write(dev, CMD, &ssd1306_init_cmds[i], 1);
+        if(ret < 0)
         {
             dev_err(&dev->spi->dev, "write failed: %d\n", ret);
             return ret;
         }
     }
+
+    ret = ssd1306_clear(dev);
     return ret;
 }
 
@@ -125,12 +134,12 @@ static int ssd1306_write(struct ssd1306_dev *dev, bool is_cmd, const u8 *buf, si
     int ret = 0;
     if(is_cmd)
     {
-        gpiod_set_value(dev->dc_gpio, 1);
+        gpiod_set_value_cansleep(dev->dc_gpio, 0);
     } else {
-        gpiod_set_value(dev->dc_gpio, 0);
+        gpiod_set_value_cansleep(dev->dc_gpio, 1);
     }
     ret = spi_write(dev->spi, buf, len);
-    if(!ret)
+    if(ret < 0)
     {
         dev_err(&dev->spi->dev, "write failed: %d\n", ret);
         return ret;
@@ -175,7 +184,7 @@ static ssize_t ssd1306_fops_write(struct file *filep, const char __user *buf, si
 
 	/*Clear screen from top-left*/
 	ret = ssd1306_set_cursor(dev, 0, 0);
-	if(!ret)
+	if(ret < 0)
 	{
 		kfree(kbuf);
 		return ret;
@@ -184,7 +193,7 @@ static ssize_t ssd1306_fops_write(struct file *filep, const char __user *buf, si
 	for(i = 0; i < len; i++)
 	{
 		ret = ssd1306_putchar(dev, kbuf[i]);
-		if(!ret)
+		if(ret < 0)
 		{
 			kfree(kbuf);
 			return ret;
@@ -195,22 +204,23 @@ static ssize_t ssd1306_fops_write(struct file *filep, const char __user *buf, si
 	
 }
 
+
 static const struct file_operations ssd1306_fops = {
     .owner = THIS_MODULE,
     .write = ssd1306_fops_write,
 };
 
 static const struct of_device_id ssd1306_of_match[] = {
-    {.compatible = "solomon, ssd1306"},
+    {.compatible = "solomon,ssd1306"},
     {}
 };
 
 static int ssd1306_probe(struct spi_device *spi)
 {
     struct ssd1306_dev *dev;
-    int ret;
-    dev = devm_kmalloc(&spi->dev, sizeof(*dev), GFP_KERNEL);
-    if(!ret)
+    int ret = 0;
+    dev = devm_kzalloc(&spi->dev, sizeof(*dev), GFP_KERNEL);
+    if(!dev)
     {
         return -ENOMEM;
     }
@@ -219,14 +229,27 @@ static int ssd1306_probe(struct spi_device *spi)
     spi_set_drvdata(spi, dev);
 
     dev->misc.minor = MISC_DYNAMIC_MINOR;
-    dev->misc.name = DEVICE_NAME,
-     dev->misc.fops = &ssd1306_fops;
-    dev->dc_gpio = gpiod_get(&spi->dev, "dc", GPIOD_OUT_LOW);
-    dev->reset_gpio = gpiod_get(&spi->dev, "reset", GPIOD_OUT_LOW);
+    dev->misc.name = DEVICE_NAME;
+    dev->misc.fops = &ssd1306_fops;
+    dev->dc_gpio = devm_gpiod_get(&spi->dev, "dc", GPIOD_OUT_LOW);
+
+    if(IS_ERR(dev->dc_gpio)) {
+        ret = PTR_ERR(dev->dc_gpio);
+        dev_err(&spi->dev, "failed to get dc gpio: %d\n", ret);
+        return ret;
+    }
+
+    dev->reset_gpio = devm_gpiod_get(&spi->dev, "reset", GPIOD_OUT_LOW);
+
+    if(IS_ERR(dev->reset_gpio)) {
+        ret = PTR_ERR(dev->reset_gpio);
+        dev_err(&spi->dev, "failed to get reset gpio: %d\n", ret);
+        return ret;
+    }
 
     ret = misc_register(&dev->misc);
 
-    if(!ret)
+    if(ret < 0)
     {   
         dev_err(&spi->dev, "misc register failed: %d\n", ret);
         return ret;
@@ -234,15 +257,25 @@ static int ssd1306_probe(struct spi_device *spi)
 
     //init 
     ret = ssd1306_init_display(dev);
-    return 0;
+    if(ret < 0)
+    {
+        misc_deregister(&dev->misc);
+        return ret;
+    }
+    return ret;
 }
 
 static void ssd1306_remove(struct spi_device *spi)
 {
     //Clean up
+    u8 tmp = 0xAE;
 	struct ssd1306_dev *dev = spi_get_drvdata(spi);
+    if(!dev)
+    {
+        return;
+    }
 	ssd1306_clear(dev);
-	ssd1306_write(dev, CMD, 0xAE, sizeof(0xAE)); //Display OFF
+	ssd1306_write(dev, CMD, &tmp, 1); //Display OFF
 	misc_deregister(&dev->misc);
 	dev_info(&spi->dev, "SSD1306 removed\n");
 
