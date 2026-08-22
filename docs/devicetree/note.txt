@@ -45,3 +45,15 @@ driver->probe()
 Device sẵn sàng hoạt động
 
 //3. DTS Syntax & cau truc co binary
+
+//4. Interrupt trong DTS
+
+4.4 Interrupt phân cấp 
+
+CPU (Cortex-A8)
+   ↑
+INTC (interrupt-controller@48200000)   ← tầng 1: controller "gốc"
+   ↑
+GPIO0/1/2/3 (gpio@0)                    ← tầng 2: vừa là DEVICE, vừa là CONTROLLER
+   ↑
+Button/switch nối vào 1 pin cụ thể      ← tầng 3: device lá
