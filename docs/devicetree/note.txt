@@ -21,6 +21,9 @@ b3: Kernel convert dtb từ dạng flat binary thành dạng cây: device node
 
 -> khi trường compatible của devicetree và of_match_table matching, hàm probe() sẽ được kernel gọi
 
+// dich nguoc .dtb sang .dts
+dtc -I dtb -O dts -o decompiled_board.dts original_board.dtb
+
 U-Boot
   │  load DTB vào RAM, truyền địa chỉ cho kernel
   ▼
