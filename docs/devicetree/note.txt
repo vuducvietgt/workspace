@@ -6,3 +6,39 @@
 
 
 //2. DT trong kernel boot flow
+
+2.1 bootloader và DTB
+Trước khi kernel chạy, bootloader (Uboot) sẽ chuẩn bị DTB:
+- Load kernel image (zimage) vào RAM
+- Load DTB vào RAM tại một địa chỉ cố định, thường ngay sau kernel image
+
+2.2 Kernel nhận DTB
+b1: kiểm tra magic number 0xd00dfeed để kiểm tra tính hợp lệ
+    xxd am335x-boneblack.dtb | head -1
+    00000000: d00d feed 0001 8496 0000 0038 0001 701c  ...........8..p.
+b2: early_init_dt_scan(): Kernel sẽ scan một số thông tin như về: RAM /memory và boot arguments /chosen 
+b3: Kernel convert dtb từ dạng flat binary thành dạng cây: device node
+
+-> khi trường compatible của devicetree và of_match_table matching, hàm probe() sẽ được kernel gọi
+
+U-Boot
+  │  load DTB vào RAM, truyền địa chỉ cho kernel
+  ▼
+early_init_dt_scan()
+  │  đọc /memory, /chosen từ flat DTB
+  ▼
+unflatten_device_tree()
+  │  flat DTB → cây device_node trong RAM
+  ▼
+of_platform_populate()
+  │  device_node → platform_device
+  ▼
+Driver matching
+  │  so sánh compatible string
+  ▼
+driver->probe()
+  │  driver đọc thông tin từ DT, map register, request IRQ...
+  ▼
+Device sẵn sàng hoạt động
+
+//3. DTS Syntax & cau truc co binary
