@@ -70,4 +70,16 @@ Kết quả: counter = 6, nhưng đáng lẽ phải là 7 (vì cả ISR và main
 -> Using atomic/mutex/spinlock
 -> temporary disable/enable interrupt
    __disable_irq() / __enable_irq() -> prevent ISR process during critical section
-   
+
+
+//ISR-safe coding
+-> Rule: ISR should run as fast as possible
+-> Why?: If the ISR is stuck then the other ISR is miss and the critical section cannot be process on time
+
+1. 3 things should prevent during ISR
+-> malloc/free (uboresictable timing function) -> bad for code need process as fast as possible
+-> Blocking call: delay(), semaphore/mutex (need time to wait the other release lock) -> ISR will wait and then the entire operation are locked
+-> Complex IO:: printf()
+
+
+
