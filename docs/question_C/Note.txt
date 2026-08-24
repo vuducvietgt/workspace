@@ -39,3 +39,35 @@ int *const ptr = val;
 const int *const ptr = &val;
 //*ptr = 50; ERROR
 //ptr = &another; ERROR
+
+
+//Volatile 
+1. Problem
+-> Compiler can optimized by cache data into register CPU instead of read every cycle from RAM
+-> If the variable is changed by others(ISR, HW, register, ...) -> the variable data cannot be change because the compiler optimization
+
+2. volatile solve
+-> Tell to the compiler that the variable can be changed everytime
+-> Have to read from RAM each time, not use cache value
+
+3. Limitation of volatile
+-> Cannot be safety for race condition
+
+Bước 1: main() bắt đầu counter++
+         → LOAD R0, [counter]     ; R0 = 5 (giá trị hiện tại)
+         
+Bước 2: NGẮT XẢY RA ngay đây, trước khi main kịp ADD/STORE
+         → CPU nhảy vào ISR
+         → ISR chạy xong counter++ hoàn chỉnh: đọc 5, +1, ghi lại → counter = 6
+
+Bước 3: CPU quay lại main(), tiếp tục dở dang từ chỗ đã dừng
+         → ADD R0, R0, #1         ; R0 = 5 + 1 = 6 (dùng giá trị CŨ đã load ở bước 1!)
+         → STORE [counter], R0    ; ghi 6 vào counter
+
+Kết quả: counter = 6, nhưng đáng lẽ phải là 7 (vì cả ISR và main đều +1 một lần).
+
+4. Solve "Race Condition"
+-> Using atomic/mutex/spinlock
+-> temporary disable/enable interrupt
+   __disable_irq() / __enable_irq() -> prevent ISR process during critical section
+   
