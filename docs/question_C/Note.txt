@@ -1,0 +1,41 @@
+//Pointer
+
+#1. Void pointer
+-> special pointer that can point to any data type
+int val = 100;
+void *ptr;
+ptr = &val;
+
+#2. function pointer
+-> store address of a function
+-> used to implement callback functions, event handling, dynamic function
+int (*fptr)(int, int);
+fptr = &add; //1
+fptr = &sub; //2
+printf("%d", fptr(10, 5));
+
+-> Callback function
+void execute(int (*func)(int, int))
+{
+    int result = func(10, 5);
+    printf("%d\n", result);
+}
+execute(add);
+execute(sub);
+
+#3. Constant Pointers vs Pointers to Constants
+
+-> Pointer to constant data - data can't modify
+const int *ptr = &val;
+//*ptr = 50 -> ERROR: cannot modify through ptr
+ptr = &another; //Can point to different
+
+-> Constant pointer - Pointer itself can't be reassigned
+int *const ptr = val;
+*ptr = 50; //Okay, can be modify data
+//ptr = &another; -> Error: Cannot reassigned pointer
+
+-> Constant pointer to Constant data
+const int *const ptr = &val;
+//*ptr = 50; ERROR
+//ptr = &another; ERROR
