@@ -124,4 +124,63 @@ padding:   byte 11        [1 byte, trailing — rounds 11→12]
 -> Big-endian (many network protocols): most significant byte (MSB) stored at the lowest address
 
 
+//Struct
 
+-> Struct stores all fields simultaneously, each with its own memory region
+
+
+//Union - fields share the same memory
+
+-> All fields in a union overlap the same address
+-> Union's size equals the size of its largest field
+
+union Value {
+    uint8_t  byte;
+    uint16_t half;
+    uint32_t word;
+};
+
+-> sizeof(Value) = 4 bytes (Matching the largest field)
+-> Common use in embedded:
+
+union Option {
+    uint16_t option_value;
+    uint8_t dry;
+    uint8_t spin;
+};
+
+
+//Bitfield
+
+struct StatusRegister {
+    uint8_t enable   : 1;   // 1 bit            -> Instead of reg |= (1 << 0);
+    uint8_t mode     : 2;   // 2 bits
+    uint8_t reserved : 3;   // 3 bits
+    uint8_t error    : 2;   // 2 bits
+};  // total: 8 bits = exactly 1 byte
+
+-> Disadvantages of bitfield:
+    1. The compiler can decide what bit are first
+        Compiler A:
+            a -> bit0
+            b -> bit1
+        Compiler B:
+            a -> bit1
+            b -> bit0
+    2. Affects by  big-endian and little-endian
+
+
+//Packing - Forcing the compiler to skip padding
+
+struct __attribute__((packed)) Packet {
+    char type;
+    float value;
+    short id;
+    char checksum;
+};
+-> Not packed: 12 bytes
+-> Packed: exactly 1+4+2+1 = 8 bytes, no padding
+
+-> When a struct needs to match a fixed data format byte-for-byte (network protocol, file format, data received via SPI/I2C from another device)
+-> Some CPU core dont support for unaligned data
+-> Packing can affect to the CPU efficiency
