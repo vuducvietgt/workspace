@@ -1,10 +1,10 @@
-#Start-up and Configuration
+<h1> Start-up and Configuration <h1>
 
-##Stage Boot of BBB
+## Stage Boot of BBB
 
 ![alt text](image.png)
 
-###1. RBL - ROM Bootloader
+### 1. RBL - ROM Bootloader
 - This code is permanently burned into AM335x chip, cannot be changed
 - When the power is applied, the CPU runs this code first
 - Task: minimual HW initialization: clock, pin muxing, then search for the next stage boot (SPL)
@@ -14,7 +14,7 @@
 ![alt text](image-2.png)
 ![alt text](image-3.png)
 
-###2. SPL- Second Program Loader (MLO)
+### 2. SPL- Second Program Loader (MLO)
 ![alt text](image-1.png)
 
 - This file is located at the start of sdcard (typically on the FAT partition)
@@ -25,7 +25,7 @@
     * Load U-boot from the storage into DDR RAM
 - Usually build together with U-boot (same source code, using CONFIG_SPL)
 
-###3. Uboot (Main Bootloader)
+### 3. Uboot (Main Bootloader)
 - The file is typycally named u-boot.img
 - The full-featured bootloader, providing:
     * Command-shell to interrupt boot (press any key within a few sec to enter U-boot console)
@@ -116,11 +116,11 @@ Or use "imi" commad such as:\
   addresses based on that document. Looking at the [code](https://elixir.bootlin.com/u-boot/latest/source/include/configs/ti_armv7_common.h#L33) in U-Boot we see that the uImage is loaded to 0x82000000 and the device tree to 0x88000000.
 
 
-###4. AM335x & Linux Boot Sequence
+### 4. AM335x & Linux Boot Sequence
 ![alt text](image-6.png)
 ![alt text](image-7.png)
 
-###5. Flow summary
+### 5. Flow summary
 
 ```text
 ROM Code (on-chip, fixed)
