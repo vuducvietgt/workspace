@@ -1,4 +1,16 @@
-#include <linux/init.h>
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * SSD1306 OLED SPI driver (text-only misc device)
+ *
+ * Exposes /dev/ssd1306. Writing text via write(2) renders it on the
+ * panel using the built-in 5x8 font. Writing an empty line clears
+ * the screen.
+ *
+ * SSD1306 is a write-only device: no MISO is used. Chip select is
+ * fully hardware-managed by the SPI controller/core, so this driver
+ * never touches CS directly. D/C and RESET are plain GPIOs.
+ */
+
 #include <linux/module.h>
 #include <linux/spi/spi.h>
 #include <linux/miscdevice.h>
@@ -6,294 +18,355 @@
 #include <linux/uaccess.h>
 #include <linux/delay.h>
 #include <linux/slab.h>
+#include <linux/gpio/consumer.h>
+#include <linux/mutex.h>
+
 #include "ssd1306.h"
+#include "ssd1306_font.h"
 
-static int ssd1306_putchar(struct ssd1306_dev *dev, char ch)
+/* Recommended SSD1306 power-up initialization sequence. */
+static const u8 ssd1306_init_seq[] = {
+	SSD1306_CMD_DISPLAY_OFF,
+	0xD5, 0x80,		/* clock divide ratio / oscillator freq */
+	0xA8, 0x3F,		/* multiplex ratio: 64 */
+	0xD3, 0x00,		/* display offset: none */
+	0x40,			/* display start line = 0 */
+	0x8D, 0x14,		/* charge pump enable */
+	0x20, 0x02,		/* memory addressing mode: page */
+	0xA1,			/* segment re-map */
+	0xC8,			/* COM output scan direction: remapped */
+	0xDA, 0x12,		/* COM pins hardware config */
+	0x81, 0xCF,		/* contrast */
+	0xD9, 0xF1,		/* pre-charge period */
+	0xDB, 0x40,		/* VCOMH deselect level */
+	0xA4,			/* resume to RAM content display */
+	0xA6,			/* normal (not inverted) display */
+	0x2E,			/* deactivate scroll */
+	SSD1306_CMD_DISPLAY_ON,
+};
+
+/*
+ * Low-level byte transfer. Toggles D/C, then hands off to the SPI
+ * core. Chip-select assert/deassert around the transfer, and the
+ * clock itself, are entirely handled by spi_sync()/the controller
+ * driver -- not this function.
+ */
+static int ssd1306_write(struct ssd1306_dev *dev, bool is_cmd,
+			  const u8 *buf, size_t len)
 {
-    const u8 *data;
-    u8 space = 0x00;
-    int ret = 0;
+	int ret;
 
-    if(ch < FONT_BEGIN || ch > FONT_LAST)
-        ch = '?';
+	gpiod_set_value_cansleep(dev->dc_gpio, is_cmd ? 0 : 1);
 
-    if(ch == '\n')
-    {
-        dev->current_page++;
-        if(dev->current_page >= SSD1306_PAGE)
-            dev->current_page = 0;
-        dev->current_col = 0;
-        ret = ssd1306_set_cursor(dev, dev->current_page, dev->current_col);
-        if(ret < 0)
-            return ret;
-    }
+	ret = spi_write(dev->spi, buf, len);
+	if (ret < 0)
+		dev_err(&dev->spi->dev, "spi_write failed: %d\n", ret);
 
-    if(dev->current_col + FONT_WIDTH + 1 > SSD1306_WIDTH)
-    {
-        dev->current_page++;
-        if(dev->current_page >= SSD1306_PAGE)
-            dev->current_page = 0;
-        dev->current_col = 0;
-        ret = ssd1306_set_cursor(dev, dev->current_page, dev->current_col);
-        if(ret < 0)
-            return ret;
-    }
-
-    data = font5x8[ch - FONT_BEGIN];;
-    ret = ssd1306_write(dev, DATA, data, FONT_WIDTH);
-    if(ret < 0)
-        return ret;
-
-    //writing a space
-    ret = ssd1306_write(dev, DATA, &space, 1);
-    if(ret < 0)
-        return ret;
-    dev->current_col += FONT_WIDTH + 1;
-
-    //set cursor after write
-    ret = ssd1306_set_cursor(dev, dev->current_page, dev->current_col);
-    if(ret < 0)
-        return ret;
-
-    return 0;
+	return ret;
 }
 
+static inline int ssd1306_write_cmd(struct ssd1306_dev *dev, u8 cmd)
+{
+	return ssd1306_write(dev, SSD1306_CMD, &cmd, 1);
+}
+
+/* Page-addressing cursor move: page register + 2 column nibbles. */
 static int ssd1306_set_cursor(struct ssd1306_dev *dev, u8 page, u8 col)
 {
-    int ret;
-    u8 tmp;
+	int ret;
 
-    //set page
-    tmp = 0xB0 | (page & 0x07);
-    ret = ssd1306_write(dev, CMD, &tmp, 1);
-    if(ret < 0)
-        return ret;
+	ret = ssd1306_write_cmd(dev, SSD1306_CMD_SET_PAGE_ADDR_BASE |
+				      (page & 0x07));
+	if (ret < 0)
+		return ret;
 
-    //set column - lower
-    tmp = col & 0x0F;
-    ret = ssd1306_write(dev, CMD, &tmp, 1);
-    if(ret < 0)
-        return ret;
-    //set column - higher
-    tmp = 0x10 | ((col >> 4) & 0x0F);
-    ret = ssd1306_write(dev, CMD, &tmp, 1);
-    if(ret < 0)
-        return ret;
+	ret = ssd1306_write_cmd(dev, SSD1306_CMD_SET_COL_LOW_BASE |
+				      (col & 0x0F));
+	if (ret < 0)
+		return ret;
 
-    dev->current_page = page;
-    dev->current_col = col;
+	ret = ssd1306_write_cmd(dev, SSD1306_CMD_SET_COL_HIGH_BASE |
+				      ((col >> 4) & 0x0F));
+	if (ret < 0)
+		return ret;
 
-    return 0;
+	dev->cur_page = page;
+	dev->cur_col = col;
+	return 0;
 }
 
 static int ssd1306_clear(struct ssd1306_dev *dev)
 {
-    u8 zeros[SSD1306_WIDTH];
-    int page, ret;
+	u8 zeros[SSD1306_WIDTH];
+	int page, ret;
 
-    memset(zeros, 0, sizeof(zeros));
+	memset(zeros, 0, sizeof(zeros));
 
-    for(page = 0; page < SSD1306_PAGE; page++)
-    {
-        ret = ssd1306_set_cursor(dev, page, 0);
-        if(ret < 0)
-            return ret;
-        ret = ssd1306_write(dev, DATA, zeros, SSD1306_WIDTH);
-        if(ret < 0)
-            return ret;
-    }
-    return ssd1306_set_cursor(dev, 0, 0);
+	for (page = 0; page < SSD1306_PAGES; page++) {
+		ret = ssd1306_set_cursor(dev, page, 0);
+		if (ret < 0)
+			return ret;
+
+		ret = ssd1306_write(dev, SSD1306_DATA, zeros, sizeof(zeros));
+		if (ret < 0)
+			return ret;
+	}
+
+	return ssd1306_set_cursor(dev, 0, 0);
+}
+
+static void ssd1306_hw_reset(struct ssd1306_dev *dev)
+{
+	if (!dev->reset_gpio)
+		return;
+
+	gpiod_set_value_cansleep(dev->reset_gpio, 1); /* assert reset */
+	usleep_range(10000, 12000);
+	gpiod_set_value_cansleep(dev->reset_gpio, 0); /* release reset */
+	usleep_range(10000, 12000);
 }
 
 static int ssd1306_init_display(struct ssd1306_dev *dev)
 {
-    int i, ret = 0;
+	int i, ret;
 
-    //Make HW reset
-    gpiod_set_value_cansleep(dev->reset_gpio, 0);
-    msleep(100);
-    gpiod_set_value_cansleep(dev->reset_gpio, 1);
-    msleep(100);
+	ssd1306_hw_reset(dev);
 
-    for(i = 0; i<(sizeof(ssd1306_init_cmds)/sizeof(ssd1306_init_cmds[0])); i++)
-    {
-        ret = ssd1306_write(dev, CMD, &ssd1306_init_cmds[i], 1);
-        if(ret < 0)
-        {
-            dev_err(&dev->spi->dev, "write failed: %d\n", ret);
-            return ret;
-        }
-    }
+	for (i = 0; i < ARRAY_SIZE(ssd1306_init_seq); i++) {
+		ret = ssd1306_write_cmd(dev, ssd1306_init_seq[i]);
+		if (ret < 0)
+			return ret;
 
-    ret = ssd1306_clear(dev);
-    return ret;
+		/* let the charge pump settle before continuing */
+		if (ssd1306_init_seq[i] == 0x14)
+			usleep_range(2000, 3000);
+	}
+
+	return ssd1306_clear(dev);
 }
 
-static int ssd1306_write(struct ssd1306_dev *dev, bool is_cmd, const u8 *buf, size_t len)
+/*
+ * Draw one glyph followed by a blank spacer column, advancing the
+ * cursor. Wraps to the next page when the line is full or on '\n'.
+ */
+static int ssd1306_putchar(struct ssd1306_dev *dev, char ch)
 {
-    int ret = 0;
-    if(is_cmd)
-    {
-        gpiod_set_value_cansleep(dev->dc_gpio, 0);
-    } else {
-        gpiod_set_value_cansleep(dev->dc_gpio, 1);
-    }
-    ret = spi_write(dev->spi, buf, len);
-    if(ret < 0)
-    {
-        dev_err(&dev->spi->dev, "write failed: %d\n", ret);
-        return ret;
-    }
-    return ret;
+	const u8 *glyph;
+	u8 blank = 0x00;
+	int ret;
+
+	if (ch == '\n') {
+		dev->cur_page = (dev->cur_page + 1) % SSD1306_PAGES;
+		dev->cur_col = 0;
+		return ssd1306_set_cursor(dev, dev->cur_page, dev->cur_col);
+	}
+
+	if (ch < FONT_FIRST_CHAR || ch > FONT_LAST_CHAR)
+		ch = '?';
+
+	/* +1 accounts for the spacer column written after the glyph */
+	if (dev->cur_col + FONT_WIDTH + 1 > SSD1306_WIDTH) {
+		dev->cur_page = (dev->cur_page + 1) % SSD1306_PAGES;
+		dev->cur_col = 0;
+		ret = ssd1306_set_cursor(dev, dev->cur_page, dev->cur_col);
+		if (ret < 0)
+			return ret;
+	}
+
+	glyph = ssd1306_font5x8[ch - FONT_FIRST_CHAR];
+
+	ret = ssd1306_write(dev, SSD1306_DATA, glyph, FONT_WIDTH);
+	if (ret < 0)
+		return ret;
+
+	ret = ssd1306_write(dev, SSD1306_DATA, &blank, 1);
+	if (ret < 0)
+		return ret;
+
+	dev->cur_col += FONT_WIDTH + 1;
+	return ssd1306_set_cursor(dev, dev->cur_page, dev->cur_col);
 }
 
-static ssize_t ssd1306_fops_write(struct file *filep, const char __user *buf, size_t count, loff_t *offset)
+static int ssd1306_put_string(struct ssd1306_dev *dev, const char *str)
 {
+	int ret;
+
+	while (*str) {
+		ret = ssd1306_putchar(dev, *str++);
+		if (ret < 0)
+			return ret;
+	}
+
+	return 0;
+}
+
+static ssize_t ssd1306_fops_write(struct file *filp, const char __user *ubuf,
+				   size_t count, loff_t *off)
+{
+	struct ssd1306_dev *dev = container_of(filp->private_data,
+						struct ssd1306_dev, misc);
 	char *kbuf;
+	size_t len;
 	int ret, i;
-	ssize_t len;
 
-	struct ssd1306_dev *dev = container_of(filep->private_data, struct ssd1306_dev, misc);
-	if(count <= 0)
+	if (count == 0)
 		return 0;
-	
-	kbuf = kmalloc(count+1, GFP_KERNEL);
-	if(!kbuf)
+
+	/* screen only holds a few hundred glyphs; cap absurd writes */
+	if (count > 512)
+		count = 512;
+
+	kbuf = kmalloc(count + 1, GFP_KERNEL);
+	if (!kbuf)
 		return -ENOMEM;
-	
-	if(copy_from_user(kbuf, buf, count))
-	{
+
+	if (copy_from_user(kbuf, ubuf, count)) {
 		kfree(kbuf);
 		return -EFAULT;
 	}
-
 	kbuf[count] = '\0';
-	len = count;
 
-	/*Strip trailing newline from echo*/
-	while(len > 0 && kbuf[len-1] == '\n')
+	len = count;
+	while (len > 0 && kbuf[len - 1] == '\n')
 		len--;
 
-	/*Emptystring (or only newline) -> clear screen*/
-	if(len == 0)
-	{
+	mutex_lock(&dev->lock);
+
+	if (len == 0) {
 		ret = ssd1306_clear(dev);
-		kfree(kbuf);
-		return ret < 0 ? ret : count;
+		goto out_unlock;
 	}
 
-	/*Clear screen from top-left*/
-	ret = ssd1306_set_cursor(dev, 0, 0);
-	if(ret < 0)
-	{
-		kfree(kbuf);
-		return ret;
-	}
+	ret = ssd1306_clear(dev);
+	if (ret < 0)
+		goto out_unlock;
 
-	for(i = 0; i < len; i++)
-	{
+	for (i = 0; i < len; i++) {
 		ret = ssd1306_putchar(dev, kbuf[i]);
-		if(ret < 0)
-		{
-			kfree(kbuf);
-			return ret;
-		}
+		if (ret < 0)
+			goto out_unlock;
 	}
+
+out_unlock:
+	mutex_unlock(&dev->lock);
 	kfree(kbuf);
-	return count;
-	
+
+	return ret < 0 ? ret : count;
 }
 
-
 static const struct file_operations ssd1306_fops = {
-    .owner = THIS_MODULE,
-    .write = ssd1306_fops_write,
-};
-
-static const struct of_device_id ssd1306_of_match[] = {
-    {.compatible = "solomon,ssd1306"},
-    {}
+	.owner	= THIS_MODULE,
+	.write	= ssd1306_fops_write,
 };
 
 static int ssd1306_probe(struct spi_device *spi)
 {
-    struct ssd1306_dev *dev;
-    int ret = 0;
-    dev = devm_kzalloc(&spi->dev, sizeof(*dev), GFP_KERNEL);
-    if(!dev)
-    {
-        return -ENOMEM;
-    }
+	struct ssd1306_dev *dev;
+	int ret;
 
-    dev->spi = spi;
-    spi_set_drvdata(spi, dev);
+	dev = devm_kzalloc(&spi->dev, sizeof(*dev), GFP_KERNEL);
+	if (!dev)
+		return -ENOMEM;
 
-    dev->misc.minor = MISC_DYNAMIC_MINOR;
-    dev->misc.name = DEVICE_NAME;
-    dev->misc.fops = &ssd1306_fops;
-    dev->dc_gpio = devm_gpiod_get(&spi->dev, "dc", GPIOD_OUT_LOW);
+	dev->spi = spi;
+	mutex_init(&dev->lock);
+	spi_set_drvdata(spi, dev);
 
-    if(IS_ERR(dev->dc_gpio)) {
-        ret = PTR_ERR(dev->dc_gpio);
-        dev_err(&spi->dev, "failed to get dc gpio: %d\n", ret);
-        return ret;
-    }
+	spi->mode = SPI_MODE_0;
+	spi->bits_per_word = 8;
+	ret = spi_setup(spi);
+	if (ret < 0) {
+		dev_err(&spi->dev, "spi_setup failed: %d\n", ret);
+		return ret;
+	}
 
-    dev->reset_gpio = devm_gpiod_get(&spi->dev, "reset", GPIOD_OUT_LOW);
+	dev->dc_gpio = devm_gpiod_get(&spi->dev, "dc", GPIOD_OUT_LOW);
+	if (IS_ERR(dev->dc_gpio)) {
+		ret = PTR_ERR(dev->dc_gpio);
+		dev_err(&spi->dev, "failed to get dc-gpios: %d\n", ret);
+		return ret;
+	}
 
-    if(IS_ERR(dev->reset_gpio)) {
-        ret = PTR_ERR(dev->reset_gpio);
-        dev_err(&spi->dev, "failed to get reset gpio: %d\n", ret);
-        return ret;
-    }
+	/* reset line is optional: some boards tie RES to VCC */
+	dev->reset_gpio = devm_gpiod_get_optional(&spi->dev, "reset",
+						   GPIOD_OUT_LOW);
+	if (IS_ERR(dev->reset_gpio)) {
+		ret = PTR_ERR(dev->reset_gpio);
+		dev_err(&spi->dev, "failed to get reset-gpios: %d\n", ret);
+		return ret;
+	}
 
-    ret = misc_register(&dev->misc);
+	dev->misc.minor = MISC_DYNAMIC_MINOR;
+	dev->misc.name = SSD1306_DEVICE_NAME;
+	dev->misc.fops = &ssd1306_fops;
 
-    if(ret < 0)
-    {   
-        dev_err(&spi->dev, "misc register failed: %d\n", ret);
-        return ret;
-    }
+	ret = misc_register(&dev->misc);
+	if (ret < 0) {
+		dev_err(&spi->dev, "misc_register failed: %d\n", ret);
+		return ret;
+	}
 
-    //init 
-    ret = ssd1306_init_display(dev);
-    if(ret < 0)
-    {
-        misc_deregister(&dev->misc);
-        return ret;
-    }
-    return ret;
+	ret = ssd1306_init_display(dev);
+	if (ret < 0) {
+		dev_err(&spi->dev, "display init failed: %d\n", ret);
+		misc_deregister(&dev->misc);
+		return ret;
+	}
+
+	dev_info(&spi->dev, "SSD1306 ready at /dev/%s\n",
+		 SSD1306_DEVICE_NAME);
+
+	ssd1306_put_string(dev, "Hello, world!\nThis is a test of the SSD1306 text driver.\n");
+
+	return 0;
 }
 
 static void ssd1306_remove(struct spi_device *spi)
 {
-    //Clean up
-    u8 tmp = 0xAE;
 	struct ssd1306_dev *dev = spi_get_drvdata(spi);
-    if(!dev)
-    {
-        return;
-    }
+
+	if (!dev)
+		return;
+
+	mutex_lock(&dev->lock);
 	ssd1306_clear(dev);
-	ssd1306_write(dev, CMD, &tmp, 1); //Display OFF
+	ssd1306_write_cmd(dev, SSD1306_CMD_DISPLAY_OFF);
+	mutex_unlock(&dev->lock);
+
 	misc_deregister(&dev->misc);
 	dev_info(&spi->dev, "SSD1306 removed\n");
-
 }
 
+/*
+ * NOTE on the compatible string: "solomon,ssd1306" is already owned
+ * by the in-tree DRM panel driver (drivers/gpu/drm/solomon/ssd130x-spi.c).
+ * Using that string here lets the mainline driver win the OF match and
+ * bind first, silently preventing this driver's probe() from ever
+ * running. Use a distinct vendor prefix instead.
+ */
+static const struct of_device_id ssd1306_of_match[] = {
+	{ .compatible = "solomon,ssd1306-spi" },
+	{ }
+};
 MODULE_DEVICE_TABLE(of, ssd1306_of_match);
 
-static struct spi_driver ssd1306_driver = {
-    .driver = {
-        .name = DEVICE_NAME,
-        .of_match_table = ssd1306_of_match,
-    },
-    .probe = ssd1306_probe,
-    .remove = ssd1306_remove,
+static const struct spi_device_id ssd1306_spi_ids[] = {
+	{ "ssd1306-spi", 0 },
+	{ }
 };
+MODULE_DEVICE_TABLE(spi, ssd1306_spi_ids);
 
+static struct spi_driver ssd1306_driver = {
+	.driver = {
+		.name		= SSD1306_DEVICE_NAME,
+		.of_match_table	= ssd1306_of_match,
+	},
+	.id_table	= ssd1306_spi_ids,
+	.probe		= ssd1306_probe,
+	.remove		= ssd1306_remove,
+};
 module_spi_driver(ssd1306_driver);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Somebody");
-MODULE_DESCRIPTION("SSD1306-device driver");
+MODULE_DESCRIPTION("SSD1306 OLED SPI text driver");
